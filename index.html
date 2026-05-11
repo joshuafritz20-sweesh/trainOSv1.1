@@ -374,6 +374,33 @@
     <div class="workout-list" id="allList">
       <div class="empty-state"><div class="empty-icon">📋</div>Nothing logged yet.</div>
     </div>
+
+    <div class="section-title" style="margin-top:24px">Import from TrainingPeaks / Garmin</div>
+    <div class="form-card" id="importCard">
+      <div style="font-size:13px; color:#666; line-height:1.6; margin-bottom:12px">
+        Drop your <strong style="color:#aaa">.fit.gz</strong> files here to bulk import. All data stays on your device.
+      </div>
+      <div id="dropZone" style="
+        border: 1.5px dashed #333; border-radius: 12px;
+        padding: 28px 16px; text-align: center; cursor: pointer;
+        transition: border-color 0.2s; position: relative;
+      " onclick="document.getElementById('fitFileInput').click()"
+         ondragover="event.preventDefault(); this.style.borderColor='#555'"
+         ondragleave="this.style.borderColor='#333'"
+         ondrop="handleDrop(event)">
+        <div style="font-size:28px; margin-bottom:8px">📂</div>
+        <div style="font-size:14px; color:#888">Tap to select files</div>
+        <div style="font-size:12px; color:#555; margin-top:4px">or drag & drop .fit.gz files</div>
+        <input type="file" id="fitFileInput" accept=".gz" multiple
+          style="position:absolute;inset:0;opacity:0;cursor:pointer"
+          onchange="handleFileSelect(this.files)" />
+      </div>
+      <div id="importStatus" style="font-size:13px; color:#666; margin-top:10px; min-height:20px; line-height:1.6"></div>
+      <div id="importPreview" style="display:none; margin-top:10px"></div>
+      <button class="btn-accent" id="importBtn" style="display:none; margin-top:10px" onclick="confirmImport()">
+        ✓ Import workouts
+      </button>
+    </div>
   </div>
 
   <!-- AI Coach -->
@@ -671,6 +698,286 @@ COACH NOTE: (one insight for this athlete's limiters)`;
   }
 }
 
+// ── FIT.gz Import ──────────────────────────────────────────
+let pendingImport = [];
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').style.borderColor = '#333';
+  handleFileSelect(e.dataTransfer.files);
+}
+
+async function handleFileSelect(files) {
+  if (!files.length) return;
+  const status = document.getElementById('importStatus');
+  const preview = document.getElementById('importPreview');
+  const btn = document.getElementById('importBtn');
+  status.textContent = `Reading ${files.length} file${files.length > 1 ? 's' : ''}…`;
+  preview.style.display = 'none';
+  btn.style.display = 'none';
+  pendingImport = [];
+
+  for (const file of files) {
+    try {
+      const parsed = await parseFitGz(file);
+      if (parsed) pendingImport.push(parsed);
+    } catch(e) {
+      console.warn('Could not parse', file.name, e);
+    }
+  }
+
+  if (!pendingImport.length) {
+    status.textContent = 'No workouts could be parsed. Make sure files are .fit.gz format.';
+    return;
+  }
+
+  // Sort by date descending
+  pendingImport.sort((a, b) => b.date.localeCompare(a.date));
+
+  status.textContent = `Found ${pendingImport.length} workout${pendingImport.length > 1 ? 's' : ''} ready to import:`;
+  preview.style.display = 'block';
+  preview.innerHTML = pendingImport.map(w =>
+    `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:0.5px solid #1e1e1e;font-size:13px">
+      <span>${w.sport==='swim'?'🏊':w.sport==='run'?'🏃':'🚴'}</span>
+      <span style="color:#aaa;flex:1">${w.date} · ${w.title}</span>
+      <span style="color:#666;font-variant-numeric:tabular-nums">${w.tss} TSS</span>
+    </div>`
+  ).join('');
+  btn.style.display = 'block';
+}
+
+function confirmImport() {
+  if (!pendingImport.length) return;
+  // Merge, avoiding exact duplicates by date+sport+duration
+  const existing = new Set(workouts.map(w => `${w.date}-${w.sport}-${w.duration}`));
+  let added = 0;
+  for (const w of pendingImport) {
+    const key = `${w.date}-${w.sport}-${w.duration}`;
+    if (!existing.has(key)) {
+      workouts.push(w);
+      existing.add(key);
+      added++;
+    }
+  }
+  workouts.sort((a, b) => b.date.localeCompare(a.date));
+  save();
+  renderWorkouts();
+  document.getElementById('importStatus').textContent = `✓ Imported ${added} workout${added !== 1 ? 's' : ''}${pendingImport.length - added ? ` (${pendingImport.length - added} already existed)` : ''}.`;
+  document.getElementById('importPreview').style.display = 'none';
+  document.getElementById('importBtn').style.display = 'none';
+  pendingImport = [];
+}
+
+async function parseFitGz(file) {
+  // Decompress gzip in browser using DecompressionStream
+  const compressed = await file.arrayBuffer();
+  let fitBytes;
+  try {
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    const reader = ds.readable.getReader();
+    writer.write(new Uint8Array(compressed));
+    writer.close();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    fitBytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) { fitBytes.set(chunk, offset); offset += chunk.length; }
+  } catch(e) {
+    // Try as raw FIT if not gzipped
+    fitBytes = new Uint8Array(compressed);
+  }
+
+  return parseFitBytes(fitBytes, file.name);
+}
+
+function parseFitBytes(bytes, filename) {
+  // Minimal FIT binary parser — extracts session/lap summary messages
+  // FIT protocol: header (14 bytes) → records → CRC
+  const FTP = 305;
+  const view = new DataView(bytes.buffer);
+
+  // Verify FIT header magic ".FIT"
+  if (bytes.length < 14) return null;
+  const magic = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
+  if (magic !== '.FIT') return null;
+
+  const localMsgDefs = {};
+  let pos = bytes[0]; // header size (12 or 14)
+  const dataEnd = bytes.length - 2; // minus CRC
+
+  // Known global message numbers we care about
+  const GLOBAL_SESSION = 18;
+  const GLOBAL_LAP = 19;
+  const GLOBAL_ACTIVITY = 34;
+
+  // Field definitions we care about (field_def_num → name)
+  const SESSION_FIELDS = {
+    2: 'start_time', 5: 'total_elapsed_time', 7: 'total_distance',
+    9: 'total_calories', 14: 'avg_heart_rate', 15: 'max_heart_rate',
+    19: 'total_ascent', 20: 'total_descent', 6: 'total_timer_time',
+    15: 'max_heart_rate', 253: 'timestamp', 0: 'event', 1: 'event_type',
+    8: 'avg_speed', 16: 'avg_power', 17: 'max_power', 22: 'normalized_power',
+    25: 'total_training_effect', 24: 'total_cycles', 11: 'sport',
+    29: 'avg_cadence'
+  };
+
+  const result = { sport: 'bike', date: null, title: '', duration: null, tss: null, power: null, dist: null, notes: '' };
+  let found = false;
+
+  try {
+    while (pos < dataEnd) {
+      const recordHeader = bytes[pos++];
+      const isDefn = (recordHeader & 0x40) !== 0;
+      const localMsgNum = recordHeader & 0x0F;
+
+      if (isDefn) {
+        pos++; // reserved
+        const arch = bytes[pos++];
+        const littleEndian = arch === 0;
+        const globalMsgNum = littleEndian
+          ? (bytes[pos] | (bytes[pos+1] << 8))
+          : ((bytes[pos] << 8) | bytes[pos+1]);
+        pos += 2;
+        const numFields = bytes[pos++];
+        const fields = [];
+        for (let i = 0; i < numFields; i++) {
+          fields.push({ num: bytes[pos], size: bytes[pos+1], type: bytes[pos+2] });
+          pos += 3;
+        }
+        localMsgDefs[localMsgNum] = { globalMsgNum, littleEndian, fields };
+        // skip dev fields if present
+        if (recordHeader & 0x20) {
+          const devFields = bytes[pos++];
+          pos += devFields * 3;
+        }
+      } else {
+        const def = localMsgDefs[localMsgNum];
+        if (!def) {
+          pos++; continue;
+        }
+        const msgStart = pos;
+        const { globalMsgNum, littleEndian, fields } = def;
+        const isTarget = globalMsgNum === GLOBAL_SESSION || globalMsgNum === GLOBAL_LAP;
+
+        if (isTarget) {
+          const values = {};
+          let p = pos;
+          for (const f of fields) {
+            if (f.size === 4 && (f.num === 2 || f.num === 253 || f.num === 5 || f.num === 6)) {
+              const raw = littleEndian
+                ? (bytes[p] | bytes[p+1]<<8 | bytes[p+2]<<16 | bytes[p+3]<<24) >>> 0
+                : ((bytes[p]<<24 | bytes[p+1]<<16 | bytes[p+2]<<8 | bytes[p+3]) >>> 0);
+              values[f.num] = raw;
+            } else if (f.size === 2) {
+              const raw = littleEndian ? (bytes[p] | bytes[p+1]<<8) : (bytes[p]<<8 | bytes[p+1]);
+              values[f.num] = raw;
+            } else if (f.size === 1) {
+              values[f.num] = bytes[p];
+            }
+            p += f.size;
+          }
+
+          // Timestamp (field 253) — FIT epoch = 631065600 (Dec 31 1989)
+          const FIT_EPOCH = 631065600;
+          const ts = values[253] || values[2];
+          if (ts && ts < 0xFFFFFFFE) {
+            const d = new Date((ts + FIT_EPOCH) * 1000);
+            result.date = d.toISOString().slice(0,10);
+          }
+
+          // Duration: field 6 (timer) or 5 (elapsed), unit = ms * 1000
+          const durRaw = values[6] || values[5];
+          if (durRaw && durRaw < 0xFFFFFFFE) {
+            result.duration = Math.round(durRaw / 1000 / 60);
+          }
+
+          // Distance field 7, unit = cm
+          const distRaw = values[7];
+          if (distRaw && distRaw < 0xFFFFFFFE) {
+            const distM = distRaw / 100;
+            result._distM = distM;
+          }
+
+          // Sport field 11
+          const sportVal = values[11];
+          const SPORT_MAP = { 1: 'run', 2: 'bike', 5: 'swim', 11: 'swim', 17: 'bike' };
+          if (sportVal !== undefined) result.sport = SPORT_MAP[sportVal] || 'bike';
+
+          // Power: field 22 (NP), 16 (avg)
+          const np = values[22], avgP = values[16];
+          if (np && np < 0xFFFF) result._np = np;
+          else if (avgP && avgP < 0xFFFF) result._avgP = avgP;
+
+          // Avg speed field 8 (mm/s * 1000)
+          const spd = values[8];
+          if (spd && spd < 0xFFFF) result._speed = spd / 1000; // m/s
+
+          found = true;
+        }
+
+        // Advance past record
+        let totalSize = 0;
+        for (const f of fields) totalSize += f.size;
+        pos = msgStart + totalSize;
+      }
+    }
+  } catch(e) { /* partial parse is ok */ }
+
+  if (!found || !result.date) return null;
+
+  // Compute display fields
+  const distM = result._distM;
+  if (distM) {
+    if (result.sport === 'swim') result.dist = `${Math.round(distM)}m`;
+    else if (result.sport === 'bike') result.dist = `${(distM/1000).toFixed(1)}km`;
+    else result.dist = `${(distM/1609.34).toFixed(1)}mi`;
+  }
+
+  // Power/pace display
+  if (result.sport === 'bike') {
+    const p = result._np || result._avgP;
+    if (p) result.power = `${p}W NP`;
+  } else if (result._speed && result._speed > 0) {
+    if (result.sport === 'run') {
+      const secPerMile = 1609.34 / result._speed;
+      result.power = `${Math.floor(secPerMile/60)}:${String(Math.round(secPerMile%60)).padStart(2,'0')}/mi`;
+    } else {
+      const secPer100 = 100 / result._speed;
+      result.power = `${Math.floor(secPer100/60)}:${String(Math.round(secPer100%60)).padStart(2,'0')}/100m`;
+    }
+  }
+
+  // TSS estimate
+  const durSec = (result.duration || 0) * 60;
+  if (result.sport === 'bike' && result._np) {
+    const intensity = result._np / FTP;
+    result.tss = Math.round((durSec * result._np * intensity) / (FTP * 3600) * 100);
+  } else if (result.sport === 'run' && result._speed) {
+    const secPerMile = 1609.34 / result._speed;
+    const intensity = 380 / secPerMile;
+    result.tss = Math.round((durSec / 3600) * intensity * intensity * 100);
+  } else {
+    result.tss = Math.round((durSec / 3600) * 50);
+  }
+  result.tss = Math.max(1, result.tss);
+
+  // Title
+  const sportLabel = { swim: 'Swim', bike: 'Ride', run: 'Run' }[result.sport];
+  result.title = `${sportLabel}${result.duration ? ' ' + result.duration + 'min' : ''}`;
+
+  // Cleanup internal fields
+  delete result._np; delete result._avgP; delete result._speed; delete result._distM;
+
+  return result;
+}
+
+// ── Init ───────────────────────────────────────────────────
 function init() {
   renderChart();
   renderZones();
