@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="TrainOS" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <title>TrainOS</title>
+  <style>
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; -webkit-text-size-adjust: 100%; }
+
+    body {
+      height: 100%;
+      background: #0a0a0a;
+      color: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      /* Safe area for notch/home bar */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* ── Layout shell ── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      max-width: 430px;
+      margin: 0 auto;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px 10px;
+      border-bottom: 0.5px solid #222;
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; color: #fff; }
+    .header-sub { font-size: 12px; color: #666; margin-top: 1px; }
+    .header-badge {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+      background: #1a1a1a; border: 0.5px solid #333;
+      border-radius: 20px; padding: 4px 10px; color: #888;
+    }
+
+    /* ── Scrollable content ── */
+    .screen {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      display: none;
+      padding: 16px 20px;
+      padding-bottom: 20px;
+    }
+    .screen.active { display: block; }
+
+    /* ── Bottom nav ── */
+    .bottom-nav {
+      display: flex;
+      border-top: 0.5px solid #1e1e1e;
+      background: #0a0a0a;
+      flex-shrink: 0;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      padding: 10px 0 8px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      border: none;
+      background: transparent;
+      color: #555;
+      transition: color 0.15s;
+    }
+    .nav-item.active { color: #fff; }
+    .nav-icon { font-size: 22px; line-height: 1; }
+    .nav-label { font-size: 10px; font-weight: 500; letter-spacing: 0.03em; }
+
+    /* ── Section headings ── */
+    .section-title {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: #555; margin: 20px 0 10px;
+    }
+    .section-title:first-child { margin-top: 4px; }
+
+    /* ── Metric cards ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .metric-card {
+      background: #141414;
+      border: 0.5px solid #222;
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .metric-label { font-size: 11px; color: #555; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .metric-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; line-height: 1; }
+    .metric-unit { font-size: 13px; font-weight: 400; color: #555; margin-left: 2px; }
+    .metric-delta { font-size: 11px; margin-top: 5px; color: #555; }
+    .delta-pos { color: #34c759; }
+    .delta-neg { color: #ff453a; }
+    .delta-neu { color: #ff9f0a; }
+
+    /* ── Workout rows ── */
+    .workout-list { display: flex; flex-direction: column; gap: 8px; }
+    .workout-row {
+      display: flex; align-items: center; gap: 12px;
+      background: #141414; border: 0.5px solid #222;
+      border-radius: 14px; padding: 12px 14px;
+    }
+    .sport-indicator {
+      width: 36px; height: 36px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .sport-swim { background: #0a2a3a; }
+    .sport-bike { background: #2a1a00; }
+    .sport-run { background: #0a2a15; }
+    .workout-info { flex: 1; min-width: 0; }
+    .workout-title { font-size: 14px; font-weight: 600; color: #f0f0f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .workout-meta { font-size: 12px; color: #555; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .workout-tss { text-align: right; flex-shrink: 0; }
+    .tss-val { font-size: 18px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+    .tss-label { font-size: 10px; color: #555; }
+
+    /* ── Load chart ── */
+    .chart-card {
+      background: #141414; border: 0.5px solid #222;
+      border-radius: 14px; padding: 16px;
+    }
+    .chart-bars { display: flex; align-items: flex-end; gap: 5px; height: 70px; }
+    .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .bar-stack { display: flex; flex-direction: column; justify-content: flex-end; width: 100%; gap: 1px; }
+    .bar-seg { border-radius: 2px 2px 0 0; min-height: 2px; }
+    .bar-wk { font-size: 9px; color: #444; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .chart-legend { display: flex; gap: 12px; margin-top: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #555; }
+    .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+    /* ── Forms ── */
+    .form-card {
+      background: #141414; border: 0.5px solid #222;
+      border-radius: 14px; padding: 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    .form-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
+    .form-group input,
+    .form-group select,
+    .form-group textarea {
+      background: #1e1e1e;
+      border: 0.5px solid #333;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 15px;
+      color: #f0f0f0;
+      font-family: inherit;
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+    }
+    .form-group input:focus,
+    .form-group select:focus { outline: none; border-color: #555; }
+    .form-group select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23555' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
+
+    /* ── Buttons ── */
+    .btn-primary {
+      background: #fff; color: #000;
+      border: none; border-radius: 12px;
+      padding: 14px; font-size: 15px; font-weight: 600;
+      cursor: pointer; width: 100%;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.15s;
+    }
+    .btn-primary:active { opacity: 0.8; }
+    .btn-accent {
+      background: #1a3a2a; color: #34c759;
+      border: 0.5px solid #2a5a3a; border-radius: 12px;
+      padding: 14px; font-size: 15px; font-weight: 600;
+      cursor: pointer; width: 100%;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-accent:active { opacity: 0.8; }
+    .btn-ghost {
+      background: transparent; color: #555;
+      border: 0.5px solid #333; border-radius: 12px;
+      padding: 14px; font-size: 15px; font-weight: 500;
+      cursor: pointer; width: 100%;
+    }
+
+    /* ── Sport pills ── */
+    .sport-pills { display: flex; gap: 8px; }
+    .sport-pill {
+      flex: 1; padding: 9px 0; font-size: 13px; font-weight: 600;
+      border-radius: 10px; cursor: pointer; text-align: center;
+      border: 0.5px solid #222; background: #141414; color: #555;
+      -webkit-tap-highlight-color: transparent; transition: all 0.15s;
+    }
+    .sport-pill.active-swim { background: #0a2a3a; color: #30b0e0; border-color: #1a5a7a; }
+    .sport-pill.active-bike { background: #2a1a00; color: #ff9f0a; border-color: #5a3a00; }
+    .sport-pill.active-run  { background: #0a2a15; color: #34c759; border-color: #1a5a2a; }
+
+    /* ── AI output ── */
+    .ai-output {
+      background: #141414; border: 0.5px solid #222;
+      border-radius: 14px; padding: 16px;
+      font-size: 14px; line-height: 1.75; color: #ccc;
+      white-space: pre-wrap; min-height: 80px;
+    }
+    .ai-output.empty { color: #444; font-style: italic; }
+    .ai-loading { color: #ff9f0a; font-style: italic; }
+
+    /* ── Profile ── */
+    .profile-card {
+      background: #141414; border: 0.5px solid #222;
+      border-radius: 14px; padding: 14px 16px; margin-bottom: 10px;
+    }
+    .profile-sport-label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 10px;
+    }
+    .swim-color { color: #30b0e0; }
+    .bike-color { color: #ff9f0a; }
+    .run-color  { color: #34c759; }
+    .profile-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 7px 0; border-bottom: 0.5px solid #1e1e1e; font-size: 14px;
+    }
+    .profile-row:last-child { border-bottom: none; }
+    .profile-row-label { color: #666; }
+    .profile-row-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* ── Zone bars ── */
+    .zone-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0; border-bottom: 0.5px solid #1e1e1e; font-size: 13px;
+    }
+    .zone-row:last-child { border-bottom: none; }
+    .zone-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .zone-name { color: #888; flex: 1; }
+    .zone-watts { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+    /* ── Empty states ── */
+    .empty-state { text-align: center; padding: 32px 20px; color: #444; font-size: 14px; }
+    .empty-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.5; }
+
+    /* ── TSB gauge ── */
+    .tsb-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+    .tsb-track { flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+    .tsb-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+    .tsb-num { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <div class="header-title">TrainOS</div>
+      <div class="header-sub">Joshua · Triathlete</div>
+    </div>
+    <div class="header-badge" id="ctlBadge">CTL 118</div>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="screen active" id="screen-dashboard">
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">CTL</div>
+        <div class="metric-value">118<span class="metric-unit">pts</span></div>
+        <div class="metric-delta delta-neg">▼ 2 from peak</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">ATL</div>
+        <div class="metric-value">104<span class="metric-unit">pts</span></div>
+        <div class="metric-delta delta-pos">▲ recovering</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">TSB</div>
+        <div class="metric-value" id="dash-tsb">+14<span class="metric-unit">pts</span></div>
+        <div class="metric-delta delta-pos">Fresh · race-ready</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Week TSS</div>
+        <div class="metric-value" id="dash-week-tss">0<span class="metric-unit">pts</span></div>
+        <div class="metric-delta" id="dash-count">0 workouts</div>
+      </div>
+    </div>
+
+    <div class="section-title">Training load — 8 weeks</div>
+    <div class="chart-card">
+      <div class="chart-bars" id="chartBars"></div>
+      <div class="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#30b0e0"></div>Swim</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ff9f0a"></div>Bike</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#34c759"></div>Run</div>
+      </div>
+    </div>
+
+    <div class="section-title">Recent workouts</div>
+    <div class="workout-list" id="recentList">
+      <div class="empty-state"><div class="empty-icon">🏊</div>No workouts yet.<br>Log one in the + tab.</div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="screen" id="screen-log">
+    <div class="form-card">
+      <div class="form-row">
+        <div class="form-group">
+          <div class="form-label">Date</div>
+          <input type="date" id="wDate" />
+        </div>
+        <div class="form-group">
+          <div class="form-label">Sport</div>
+          <select id="wSport">
+            <option value="swim">🏊 Swim</option>
+            <option value="bike">🚴 Bike</option>
+            <option value="run">🏃 Run</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Title</div>
+        <input type="text" id="wTitle" placeholder="e.g. Threshold intervals" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <div class="form-label">Duration (min)</div>
+          <input type="number" id="wDuration" placeholder="60" inputmode="numeric" />
+        </div>
+        <div class="form-group">
+          <div class="form-label">TSS</div>
+          <input type="number" id="wTss" placeholder="75" inputmode="numeric" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <div class="form-label">Power / Pace</div>
+          <input type="text" id="wPower" placeholder="255W or 6:20/mi" />
+        </div>
+        <div class="form-group">
+          <div class="form-label">Distance</div>
+          <input type="text" id="wDist" placeholder="90km" />
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Notes</div>
+        <input type="text" id="wNotes" placeholder="How did it feel?" />
+      </div>
+      <button class="btn-primary" onclick="addWorkout()">Add workout</button>
+      <button class="btn-ghost" onclick="clearForm()">Clear</button>
+    </div>
+
+    <div class="section-title">All workouts</div>
+    <div class="workout-list" id="allList">
+      <div class="empty-state"><div class="empty-icon">📋</div>Nothing logged yet.</div>
+    </div>
+  </div>
+
+  <!-- AI Coach -->
+  <div class="screen" id="screen-ai">
+    <div class="section-title">Sport</div>
+    <div class="sport-pills">
+      <div class="sport-pill active-swim" id="pill-swim" onclick="selectSport('swim')">🏊 Swim</div>
+      <div class="sport-pill" id="pill-bike" onclick="selectSport('bike')">🚴 Bike</div>
+      <div class="sport-pill" id="pill-run" onclick="selectSport('run')">🏃 Run</div>
+    </div>
+
+    <div class="section-title">Workout type</div>
+    <div class="form-group">
+      <select id="aiType">
+        <option>Base / aerobic</option>
+        <option>Threshold</option>
+        <option>VO2max intervals</option>
+        <option>Recovery</option>
+        <option>Long / endurance</option>
+        <option>Race simulation</option>
+        <option>Brick</option>
+      </select>
+    </div>
+
+    <div class="section-title">Duration target</div>
+    <div class="form-group">
+      <select id="aiDuration">
+        <option>45–60 min</option>
+        <option>60–90 min</option>
+        <option>90–120 min</option>
+        <option>2–3 hours</option>
+        <option>3+ hours</option>
+      </select>
+    </div>
+
+    <div class="section-title">Extra context (optional)</div>
+    <div class="form-group">
+      <input type="text" id="aiContext" placeholder="Tired legs, hot weather, race in 3 weeks..." />
+    </div>
+
+    <div style="margin: 16px 0;">
+      <button class="btn-accent" onclick="generateWorkout()">✦ Generate with AI</button>
+    </div>
+
+    <div class="section-title">Generated workout</div>
+    <div class="ai-output empty" id="aiOutput">Tap generate to get a personalized workout.</div>
+  </div>
+
+  <!-- Profile -->
+  <div class="screen" id="screen-profile">
+    <div class="profile-card">
+      <div class="profile-sport-label swim-color">🏊 Swim</div>
+      <div class="profile-row"><span class="profile-row-label">CSS pace</span><span class="profile-row-val">1:08 / 100 SCY</span></div>
+      <div class="profile-row"><span class="profile-row-label">Pool</span><span class="profile-row-val">SCY</span></div>
+      <div class="profile-row"><span class="profile-row-label">Background</span><span class="profile-row-val">NCAA D2</span></div>
+    </div>
+    <div class="profile-card">
+      <div class="profile-sport-label bike-color">🚴 Bike</div>
+      <div class="profile-row"><span class="profile-row-label">FTP</span><span class="profile-row-val">305 W</span></div>
+      <div class="profile-row"><span class="profile-row-label">W/kg</span><span class="profile-row-val">3.79 w/kg</span></div>
+      <div class="profile-row"><span class="profile-row-label">Frame</span><span class="profile-row-val">Factor Hanzo</span></div>
+      <div class="profile-row"><span class="profile-row-label">Wheels</span><span class="profile-row-val">DT Swiss ARC 1400</span></div>
+    </div>
+    <div class="profile-card">
+      <div class="profile-sport-label run-color">🏃 Run</div>
+      <div class="profile-row"><span class="profile-row-label">Threshold pace</span><span class="profile-row-val">6:20 / mi</span></div>
+      <div class="profile-row"><span class="profile-row-label">70.3 run split</span><span class="profile-row-val">~1:27</span></div>
+      <div class="profile-row"><span class="profile-row-label">Primary limiter</span><span class="profile-row-val">Run improvement</span></div>
+    </div>
+    <div class="profile-card">
+      <div class="profile-sport-label" style="color:#888">🏆 Racing</div>
+      <div class="profile-row"><span class="profile-row-label">Best 70.3</span><span class="profile-row-val">4:03</span></div>
+      <div class="profile-row"><span class="profile-row-label">Last race</span><span class="profile-row-val">70.3 Cabo · Apr 26</span></div>
+      <div class="profile-row"><span class="profile-row-label">Weekly volume</span><span class="profile-row-val">~15 hrs</span></div>
+    </div>
+
+    <div class="section-title">Bike power zones (FTP 305W)</div>
+    <div class="profile-card" id="zonesCard"></div>
+  </div>
+
+  <!-- Bottom nav -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" onclick="switchScreen('dashboard', this)">
+      <div class="nav-icon">📊</div>
+      <div class="nav-label">Dashboard</div>
+    </button>
+    <button class="nav-item" onclick="switchScreen('log', this)">
+      <div class="nav-icon">＋</div>
+      <div class="nav-label">Log</div>
+    </button>
+    <button class="nav-item" onclick="switchScreen('ai', this)">
+      <div class="nav-icon">✦</div>
+      <div class="nav-label">AI Coach</div>
+    </button>
+    <button class="nav-item" onclick="switchScreen('profile', this)">
+      <div class="nav-icon">👤</div>
+      <div class="nav-label">Profile</div>
+    </button>
+  </nav>
+</div>
+
+<script>
+const WEEKS = [
+  { w: 'W1', s: 40, b: 180, r: 60 },
+  { w: 'W2', s: 55, b: 220, r: 80 },
+  { w: 'W3', s: 35, b: 160, r: 55 },
+  { w: 'W4', s: 60, b: 260, r: 90 },
+  { w: 'W5', s: 50, b: 300, r: 100 },
+  { w: 'W6', s: 65, b: 280, r: 95 },
+  { w: 'W7', s: 30, b: 160, r: 50 },
+  { w: 'W8', s: 0,  b: 0,   r: 0  },
+];
+
+const ZONES = [
+  { name: 'Z1 Recovery',  lo: 0,    hi: 0.55, color: '#4a90d9' },
+  { name: 'Z2 Aerobic',   lo: 0.55, hi: 0.75, color: '#ff9f0a' },
+  { name: 'Z3 Tempo',     lo: 0.75, hi: 0.87, color: '#ff6b35' },
+  { name: 'Z4 Threshold', lo: 0.87, hi: 1.05, color: '#ff3b30' },
+  { name: 'Z5 VO2max',    lo: 1.05, hi: 1.20, color: '#bf5af2' },
+];
+
+const FTP = 305;
+let workouts = JSON.parse(localStorage.getItem('trainos_workouts') || '[]');
+let aiSport = 'swim';
+
+function save() { localStorage.setItem('trainos_workouts', JSON.stringify(workouts)); }
+
+function switchScreen(name, btn) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+function selectSport(sport) {
+  aiSport = sport;
+  ['swim','bike','run'].forEach(s => {
+    const p = document.getElementById('pill-' + s);
+    p.className = 'sport-pill' + (s === sport ? ' active-' + s : '');
+  });
+}
+
+function sportEmoji(s) { return s === 'swim' ? '🏊' : s === 'bike' ? '🚴' : '🏃'; }
+function sportClass(s) { return 'sport-' + s; }
+
+function renderChart() {
+  const el = document.getElementById('chartBars');
+  const max = Math.max(...WEEKS.map(w => w.s + w.b + w.r), 1);
+  const H = 70;
+  el.innerHTML = WEEKS.map(w => {
+    const total = w.s + w.b + w.r;
+    const rH = Math.round((w.r / max) * H);
+    const bH = Math.round((w.b / max) * H);
+    const sH = Math.round((w.s / max) * H);
+    return `<div class="bar-col">
+      <div class="bar-stack" style="height:${H}px">
+        ${rH ? `<div class="bar-seg" style="height:${rH}px;background:#34c759"></div>` : ''}
+        ${bH ? `<div class="bar-seg" style="height:${bH}px;background:#ff9f0a"></div>` : ''}
+        ${sH ? `<div class="bar-seg" style="height:${sH}px;background:#30b0e0"></div>` : ''}
+      </div>
+      <div class="bar-wk">${w.w}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderZones() {
+  const el = document.getElementById('zonesCard');
+  el.innerHTML = ZONES.map(z => {
+    const lo = Math.round(z.lo * FTP);
+    const hi = Math.round(z.hi * FTP);
+    return `<div class="zone-row">
+      <div class="zone-dot" style="background:${z.color}"></div>
+      <div class="zone-name">${z.name}</div>
+      <div class="zone-watts" style="color:${z.color}">${lo}–${hi}W</div>
+    </div>`;
+  }).join('');
+}
+
+function makeWorkoutRow(w) {
+  return `<div class="workout-row">
+    <div class="sport-indicator ${sportClass(w.sport)}">${sportEmoji(w.sport)}</div>
+    <div class="workout-info">
+      <div class="workout-title">${w.title}</div>
+      <div class="workout-meta">${w.date}${w.duration ? ' · ' + w.duration + 'm' : ''}${w.dist ? ' · ' + w.dist : ''}${w.power ? ' · ' + w.power : ''}</div>
+    </div>
+    <div class="workout-tss">
+      <div class="tss-val">${w.tss}</div>
+      <div class="tss-label">TSS</div>
+    </div>
+  </div>`;
+}
+
+function renderWorkouts() {
+  const recent = document.getElementById('recentList');
+  const all = document.getElementById('allList');
+  if (workouts.length === 0) {
+    recent.innerHTML = '<div class="empty-state"><div class="empty-icon">🏊</div>No workouts yet.<br>Log one in the + tab.</div>';
+    all.innerHTML = '<div class="empty-state"><div class="empty-icon">📋</div>Nothing logged yet.</div>';
+  } else {
+    recent.innerHTML = workouts.slice(0,5).map(makeWorkoutRow).join('');
+    all.innerHTML = workouts.map(makeWorkoutRow).join('');
+  }
+  updateMetrics();
+}
+
+function updateMetrics() {
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - now.getDay());
+  const weekTSS = workouts
+    .filter(w => new Date(w.date) >= weekStart)
+    .reduce((s, w) => s + (parseInt(w.tss) || 0), 0);
+  document.getElementById('dash-week-tss').innerHTML = weekTSS + '<span class="metric-unit">pts</span>';
+  document.getElementById('dash-count').textContent = workouts.length + ' workout' + (workouts.length !== 1 ? 's' : '') + ' logged';
+}
+
+function addWorkout() {
+  const date = document.getElementById('wDate').value;
+  const sport = document.getElementById('wSport').value;
+  const title = document.getElementById('wTitle').value.trim();
+  const tss = document.getElementById('wTss').value;
+
+  if (!date || !title || !tss) {
+    alert('Please fill in date, title, and TSS.');
+    return;
+  }
+
+  workouts.unshift({
+    date,
+    sport,
+    title,
+    duration: document.getElementById('wDuration').value,
+    tss: parseInt(tss),
+    power: document.getElementById('wPower').value.trim(),
+    dist: document.getElementById('wDist').value.trim(),
+    notes: document.getElementById('wNotes').value.trim(),
+  });
+  save();
+  renderWorkouts();
+  clearForm();
+  alert('Workout added ✓');
+}
+
+function clearForm() {
+  ['wTitle','wDuration','wTss','wPower','wDist','wNotes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('wDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('wSport').value = 'bike';
+}
+
+async function generateWorkout() {
+  const type = document.getElementById('aiType').value;
+  const dur = document.getElementById('aiDuration').value;
+  const ctx = document.getElementById('aiContext').value;
+  const out = document.getElementById('aiOutput');
+
+  out.className = 'ai-output ai-loading';
+  out.textContent = 'Generating your workout…';
+
+  const profile = `Athlete: Joshua, triathlete (IRONMAN 70.3 specialist)
+FTP: 305W (3.79 w/kg) | Run threshold: 6:20/mi | Swim CSS: 1:08/100 SCY
+CTL: ~118 | TSB: +14 (post-race, fresh)
+Last race: 70.3 Cabo — 4:03 finish, 257W NP bike, 1:27 run
+Primary limiter: run. NCAA D2 swim background.`;
+
+  const prompt = `You are an elite triathlon coach. Generate a specific structured ${type} ${aiSport} workout.
+
+${profile}
+
+Request: ${type} | ${aiSport} | ${dur}${ctx ? ' | Context: ' + ctx : ''}
+
+Format:
+WARM-UP: (specific targets)
+MAIN SET: (intervals with watts/pace/rest)
+COOL-DOWN: (brief)
+EST. TSS: (number)
+COACH NOTE: (one insight for this athlete's limiters)`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await res.json();
+    const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') || 'No response.';
+    out.className = 'ai-output';
+    out.textContent = text;
+  } catch (e) {
+    out.className = 'ai-output';
+    out.textContent = 'Error generating workout. Check your connection and try again.';
+  }
+}
+
+function init() {
+  renderChart();
+  renderZones();
+  renderWorkouts();
+  document.getElementById('wDate').value = new Date().toISOString().split('T')[0];
+}
+
+init();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+}
+</script>
+</body>
+</html>
